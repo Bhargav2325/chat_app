@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const otpGenerator = require('otp-generator')
 
 
 //
@@ -45,6 +46,76 @@ exports.register = async (req, res, next) => {
 
 exports.sendOTP = async (req, res, next) => {
     const { userId } = req;
+    const new_otp = otpGenerator.generate(6, { lowerCaseAlphabets: false, upperCaseAlphabets: false, specialChars: false });
+
+    const otp_expiry_time = Date.now() + 10 * 60 * 1000; // 10 minutes after otp is sent
+
+    await User.findByIdAndUpdate(userId, {
+        otp: new_otp,
+        otp_expiry_time,
+    });
+
+    // TODO Send Mail
+
+    res.status(200).json({
+        status: "success",
+        message: "OTP sent successfully",
+
+    })
+
+};
+
+exports.verifyOTP = async (req, res, next) => {
+    // verify OTP and update user record accordingly 
+
+    const { email, otp } = req.body;
+
+    const user = await User.findOne({
+        email,
+        otp_expiry_time: { $gt: Date.now() },
+    });
+
+    if (!user) {
+        res.status(400).json({
+            status: "error",
+            message: "Email is Invalid or OTP expired",
+        });
+    }
+
+    if (user.verified) {
+        return res.status(400).json({
+            status: "error",
+            message: "Email is already verified",
+        });
+    }
+
+    if (!await user.correctOTP(otp, user.otp)) {
+        return res.status(400).json({
+            status: "error",
+            message: "OTP is incorrect",
+        });
+
+    }
+
+    // OTP is correct
+
+    user.verified = true;
+    user.otp = undefined;
+
+
+    await user.save({ new: true, validateModifiedOnly: true });
+
+    const token = signToken(user._id);
+    res.status(200).json({
+        status: "success",
+        message: "OTP verified Successfully!",
+        token,
+        user_id: user._id,
+    });
+}
+
+exports.sendOTP = async (req, res, next) => {
+    const { userId } = req;
 }
 
 
@@ -56,15 +127,16 @@ exports.login = async (req, res, next) => {
 
     if (!email || !password) {
         return res.status(400).json({ status: "error", message: "Please provide email and password" });
+
     }
 
-    const userDoc = await User.findOne({ email: email }).select("+password");
+    const user = await User.findOne({ email: email }).select("+password");
 
-    if (!userDoc || !(await userDoc.coorectPassword(password, userDoc.password))) {
-        res.status(404).json({ status: "error", message: "Email or Password is incorrect" });
+    if (!user || !(await user.coorectPassword(password, user.password))) {
+        return res.status(404).json({ status: "error", message: "Email or Password is incorrect" });
     }
 
-    const token = signToken(userDoc._id);
+    const token = signToken(user._id);
 
     res.status(200).json({
         status: "success",
